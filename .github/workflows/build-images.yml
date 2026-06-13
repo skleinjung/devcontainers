@@ -1,0 +1,93 @@
+name: build-images
+
+# Build (and, off pull requests, publish) the container images under images/.
+# Two jobs: `discover` picks which images to build (changed ones + their
+# dependents — see ci/select-images.sh); `build` generates a Docker Bake
+# definition (ci/gen-bake.sh) and builds the selected targets in dependency order
+# with a single `docker buildx bake`. Intra-repo deps (e.g. default FROM base)
+# are linked via bake target contexts, so they resolve without a registry.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  # Weekly rebuild of EVERY image (Mondays 06:00 UTC) so published images pick up
+  # upstream base-image and OS-package updates even when nothing in this repo
+  # changed. Scheduled runs only fire on the default branch.
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      build_all:
+        description: Build (and publish) every image, ignoring change detection
+        type: boolean
+        default: false
+
+# One in-flight run per ref. Cancel superseded PR runs; let main/tag runs finish
+# so a publish is never interrupted half-way.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write # push to GHCR via the built-in GITHUB_TOKEN
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.select.outputs.images }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so select-images.sh can diff against the base
+
+      - id: select
+        env:
+          # Build everything on the weekly schedule, on a manual "build_all", and
+          # on tag pushes (releases); otherwise the script diffs and selects only
+          # changed images (falling back to "all" when it can't diff).
+          BUILD_ALL: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.build_all) || github.ref_type == 'tag' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: ./ci/select-images.sh >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.images != '' && needs.discover.outputs.images != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # No login (and no push) on pull requests — fork PRs can't access GHCR and
+      # we don't publish from unmerged code. PRs still build, to validate.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generate the bake definition for ALL images (tags/labels/contexts from the
+      # Actions context); the next step builds only the selected targets, and bake
+      # pulls in their in-repo ancestors automatically.
+      - name: Generate bake definition
+        env:
+          IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: ./ci/gen-bake.sh | tee docker-bake.json
+
+      - name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }} selected targets
+        env:
+          TARGETS_JSON: ${{ needs.discover.outputs.images }}
+          PUSH: ${{ github.event_name != 'pull_request' }}
+        run: |
+          mapfile -t targets < <(jq -r '.[]' <<<"$TARGETS_JSON")
+          echo "Selected targets: ${targets[*]}"
+          args=(buildx bake -f docker-bake.json)
+          [ "$PUSH" = true ] && args+=(--push)
+          docker "${args[@]}" "${targets[@]}"

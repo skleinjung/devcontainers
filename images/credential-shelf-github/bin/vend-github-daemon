@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# vend-github-daemon — launch one vend-github-token loop per installation in
+# installations.json (one installation == one org). If any loop exits, exit so the
+# container's restart policy brings them all back.
+set -euo pipefail
+
+INSTALLATIONS="${GH_INSTALLATIONS_FILE:-/etc/credential-shelf/installations.json}"
+
+if [ ! -f "$INSTALLATIONS" ]; then
+  echo "vend-github-daemon: $INSTALLATIONS not found; nothing to vend" >&2
+  exit 1
+fi
+
+count=$(jq 'length' "$INSTALLATIONS")
+if [ "$count" -eq 0 ]; then
+  # The baked default is empty — idle instead of crash-looping until a derived image
+  # bakes a real installations.json.
+  echo "vend-github-daemon: no installations configured; idling (bake installations.json to vend)" >&2
+  exec sleep infinity
+fi
+
+for i in $(seq 0 $((count - 1))); do
+  entry=$(jq -c ".[$i]" "$INSTALLATIONS")
+  # name defaults to org; repos/perms optional (empty => App's full grant for that field)
+  export VEND_GH_INSTALLATION_ID="$(jq -r '.installation_id' <<<"$entry")"
+  export VEND_GH_TOKEN_NAME="$(jq -r '.name // .org' <<<"$entry")"
+  export VEND_GH_REPOS="$(jq -rc '.repos // empty' <<<"$entry")"
+  export VEND_GH_PERMS="$(jq -rc '.perms // empty' <<<"$entry")"
+  vend-github-token &
+done
+
+wait -n
+echo "vend-github-daemon: a vend loop exited; restarting container" >&2
+exit 1

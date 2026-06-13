@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# vend-aws-creds — AWS provider for the shelf credential sidecar.
+#
+# Exports STS credentials for the profiles in $VEND_AWS_PROFILES (from the SSO session in
+# this container's ~/.aws) and atomically writes the native AWS shared-credentials file
+# at /creds/aws/credentials — the docs/SECRETS.md AWS exception. The first profile also
+# becomes [default]; consumers select others with AWS_PROFILE=<name>. The full SSO
+# session stays in this container; only the listed roles' ≤1h creds reach the shelf.
+#
+# With no/expired SSO session it logs and waits — run `aws sso login` in this container.
+# `vend-aws-creds --once` vends a single time and exits nonzero on failure.
+set -euo pipefail
+. /usr/local/lib/sidecar-lib.sh
+
+PROFILES="${VEND_AWS_PROFILES:-}"
+SHELF="$SC_SHELF_DIR/aws"
+REFRESH_BEFORE="${VEND_REFRESH_BEFORE:-900}" # re-vend when < 15 min remain
+CHECK_INTERVAL="${VEND_CHECK_INTERVAL:-60}"
+FIX="run 'aws sso login' in this sidecar"
+
+log() { sc_log vend-aws-creds "$@"; }
+status_ok() { sc_status_ok aws "$(cat "$SHELF/expiration" 2>/dev/null || echo unknown)"; }
+stalled_since=""
+status_stalled() {
+  [ -n "$stalled_since" ] || stalled_since=$(date -Is)
+  sc_status_stalled aws "$FIX" "$stalled_since"
+}
+
+needs_vend() {
+  local exp exp_epoch
+  exp=$(cat "$SHELF/expiration" 2>/dev/null) || return 0
+  exp_epoch=$(date -d "$exp" +%s 2>/dev/null) || return 0
+  [ $((exp_epoch - $(date +%s))) -lt "$REFRESH_BEFORE" ]
+}
+
+write_section() {
+  local name="$1" akid="$2" secret="$3" token="$4"
+  printf '[%s]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$name" "$akid" "$secret"
+  [ -z "$token" ] || printf 'aws_session_token = %s\n' "$token"
+  printf '\n'
+}
+
+vend() {
+  local json err akid secret token exp exp_epoch tmp
+  local first=1 vended=0 failed=0 min_exp="" min_exp_epoch=""
+  [ -n "$PROFILES" ] || { log "VEND_AWS_PROFILES is empty; nothing to vend"; return 1; }
+
+  umask 077
+  mkdir -p "$SHELF"
+  tmp=$(mktemp "$SHELF/.credentials.XXXXXX")
+  err=$(mktemp)
+
+  for profile in $PROFILES; do
+    if ! json=$(aws configure export-credentials --profile "$profile" 2>"$err"); then
+      log "cannot resolve credentials for profile '$profile': $(tr '\n' ' ' <"$err" | head -c 300)"
+      failed=$((failed + 1)); first=0; continue
+    fi
+    akid=$(jq -re .AccessKeyId <<<"$json")
+    secret=$(jq -re .SecretAccessKey <<<"$json")
+    token=$(jq -r '.SessionToken // empty' <<<"$json")
+    exp=$(jq -r '.Expiration // empty' <<<"$json")
+
+    [ "$first" = 1 ] && write_section default "$akid" "$secret" "$token" >>"$tmp"
+    write_section "$profile" "$akid" "$secret" "$token" >>"$tmp"
+
+    if [ -n "$exp" ] && exp_epoch=$(date -d "$exp" +%s 2>/dev/null); then
+      if [ -z "$min_exp_epoch" ] || [ "$exp_epoch" -lt "$min_exp_epoch" ]; then min_exp_epoch=$exp_epoch; min_exp=$exp; fi
+    fi
+    vended=$((vended + 1)); first=0
+  done
+  rm -f "$err"
+
+  if [ "$vended" = 0 ]; then
+    rm -f "$tmp"
+    log "no profiles could be vended; if the SSO session is missing/expired, run: aws sso login"
+    return 1
+  fi
+
+  mv "$tmp" "$SHELF/credentials"
+  printf '%s\n' "${min_exp:-unknown}" >"$SHELF/expiration"
+  log "vended $vended profile(s) (earliest expiry ${min_exp:-unknown})"
+  [ "$failed" = 0 ] || log "WARNING: $failed profile(s) failed and are missing from the shelf this round"
+}
+
+if [ "${1:-}" = "--once" ]; then vend; exit $?; fi
+
+log "starting; vending profiles [$PROFILES] to $SHELF (refresh <${REFRESH_BEFORE}s remaining, check every ${CHECK_INTERVAL}s)"
+while true; do
+  if needs_vend; then
+    if vend; then stalled_since=""; status_ok; else status_stalled; fi
+  else
+    status_ok
+  fi
+  sleep "$CHECK_INTERVAL"
+done
