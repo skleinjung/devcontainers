@@ -56,14 +56,17 @@ is driven over a shared-volume `tmux` socket (section 9). This adds (section 8):
 Both containers still get Layer 1 hardening plus the hardened compose. It does not
 protect against untrusted code in the *dev* container — that's Layer 3, or discipline.
 
-> do we have an opinion on how credentials get into the isolated agent's container? if nto, we should at least make a statement that this concern isout of scope at layer 2
+How credentials reach the isolated agent is out of scope at Layer 2. This layer only
+establishes the agent's separate namespaces and mount topology; getting short-lived,
+scoped credentials *into* that container is a Layer 3 concern (sections 10–11). Until
+you add vending, an isolated agent simply holds no credentials.
 
 ### Layer 3 — Credential vending
 
-Add a credential sidecar that vends short-lived, scoped, per-consumer credentials over
-a socket; the powerful upstream authority never enters a consumer container.
-
-> note that 'over a socket' is not true for all sidecar implements, since we use a 'file shelf' for the initial one
+Add a credential sidecar that vends short-lived, scoped, per-consumer credentials
+through whatever transport it presents — a read-only `/creds` file shelf in the
+shipping baseline, or a socket in the broker variant. The powerful upstream authority
+never enters a consumer container.
 
 This composes with Layer 1 (a lone dev container) or Layer 2 (the agent too). In the
 shipping baseline every consumer reads the same vended secrets from a read-only
@@ -110,7 +113,15 @@ from the agent; vending (L3) governs the *vended* tokens.
 The short version: this buys you a smaller blast radius and supports good discipline.
 It is not secrecy, not a sandbox, and not protection from a compromised host.
 
-> from the above table, it doesn't really look like 'L2' gives much benefit. Is that an accurate read, or is this table not conveying the real picture accurately?
+On L2 looking thin in this table: it earns a ● on only two rows (#1 and #2), and that's
+an accurate read of the table — but those two rows are the whole of the dev's own
+identity (at-rest keys like `~/.ssh` and `~/.aws`, plus live process memory) kept out of
+reach of the agent. L2 is also what makes running an agent safe at all: without it the
+agent shares the dev's namespaces and secrets, so every "(agent)" qualifier elsewhere in
+the table only holds because L2 gave the agent its own container. What L2 genuinely does
+*not* do is protect against untrusted code in the *dev* container — that's L3 plus
+discipline. So it's narrow, but the narrow part is the boundary the whole agent story
+rests on.
 
 ---
 
