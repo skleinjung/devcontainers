@@ -1,0 +1,61 @@
+# Layer 1 + Layer 3 — hardened workspace + credential vending (no isolated agent; an
+# agent, if you run one, runs in the workspace). Copy this whole directory's contents
+# into your project's .devcontainer/. See docs/SECURITY.md §2, §10–§11; docs/SECRETS.md.
+#
+# Fill in the <PLACEHOLDERS> below + github-creds/installations.json before first run,
+# and do the one-time `aws sso login` (see README.md).
+services:
+  workspace:
+    image: ghcr.io/skleinjung/devcontainers/default:latest
+    # ...or build your own image FROM default (extra tooling, dotfiles, etc.):
+    # build: { context: ., dockerfile: Dockerfile }
+    entrypoint: ['/usr/local/bin/reap-vscode-sockets']
+    command: ['sleep', 'infinity']
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - 'no-new-privileges:true'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    environment:
+      GH_DEFAULT_ORG: <your-org>   # org git/gh use when no repo context pins one
+      AWS_REGION: us-east-1        # base already sets AWS_SHARED_CREDENTIALS_FILE → the shelf
+    volumes:
+      - ..:/workspace:cached
+      - creds-shelf:/creds:ro      # read-only vended credentials (the shelf)
+      # Personal commit-signing key (optional, read-only):
+      # - ${HOME}/.ssh/id_ed25519:/home/vscode/.ssh/id_ed25519:ro
+      # - ${HOME}/.ssh/id_ed25519.pub:/home/vscode/.ssh/id_ed25519.pub:ro
+    # NEVER add /var/run/docker.sock or privileged: true.
+
+  # ── credential sidecars (trusted) — vend to the read-only shelf ───────────────────
+  # Both share the `admin-home` volume, so a single `aws sso login` serves both. That
+  # home (the SSO session) is mounted into NO consumer — only the sidecars.
+  credential-shelf-aws:
+    image: ghcr.io/skleinjung/devcontainers/credential-shelf-aws:latest
+    init: true
+    restart: unless-stopped
+    environment:
+      # space-separated ~/.aws/config profile(s) to vend; the first also becomes [default]
+      VEND_AWS_PROFILES: <your-agent-profile>
+    volumes:
+      - creds-shelf:/creds          # rw here
+      - admin-home:/home/vscode     # SSO cache + ~/.aws
+
+  credential-shelf-github:
+    build: ./github-creds           # bakes github-creds/installations.json (reviewed rebuild)
+    init: true
+    restart: unless-stopped
+    environment:
+      VEND_GH_APP_ID: '<app-id>'
+      VEND_GH_KMS_KEY_ID: alias/github-app-signer
+      VEND_GH_AWS_PROFILE: <kms-signer-profile>   # ~/.aws/config profile holding kms:Sign
+      VEND_GH_AWS_REGION: us-east-1
+    volumes:
+      - creds-shelf:/creds
+      - admin-home:/home/vscode     # same home → one `aws sso login` serves both
+
+volumes:
+  creds-shelf:
+  admin-home:

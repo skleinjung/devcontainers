@@ -1,0 +1,32 @@
+# Layer 1 — hardened single container. Copy this file (and devcontainer.json) into your
+# project's .devcontainer/. See docs/SECURITY.md §2 (Layer 1), §5 (VS Code channels),
+# §6 (OS isolation).
+services:
+  workspace:
+    image: ghcr.io/skleinjung/devcontainers/default:latest
+
+    # The entrypoint reaps VS Code's IPC sockets (vscode-{ipc,git}-*.sock), then runs
+    # `command`. Requires "overrideCommand": false in devcontainer.json so VS Code keeps
+    # this entrypoint instead of replacing it with its own keep-alive.
+    entrypoint: ['/usr/local/bin/reap-vscode-sockets']
+    command: ['sleep', 'infinity']
+    init: true
+
+    # Untrusted-code hardening: drop every Linux capability and block setuid privilege
+    # escalation (which also makes sudo non-functional — base already removes it).
+    cap_drop:
+      - ALL
+    security_opt:
+      - 'no-new-privileges:true'
+
+    # Bridge networking (the default) — do NOT set network_mode/ipc: host. host-gateway
+    # keeps host services reachable.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+    volumes:
+      - ..:/workspace:cached
+    # NEVER add: /var/run/docker.sock, privileged: true, cap_add: SYS_PTRACE.
+
+# Host requirement: kernel.yama.ptrace_scope >= 1 (the default on most distros) — it
+# protects the VS Code ext-host heap. Never run the host with ptrace_scope=0. (SECURITY.md §5)

@@ -1,0 +1,41 @@
+{
+  // Layer 1 — hardened single container. Copy into .devcontainer/ alongside docker-compose.yml.
+  "name": "hardened",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "vscode",
+
+  // Keep the compose entrypoint (the IPC-socket reaper) instead of VS Code's own keep-alive.
+  "overrideCommand": false,
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        // Stop VS Code bridging host git credentials into the container (SECURITY.md §5).
+        "git.useIntegratedAskPass": false,
+        "remote.containers.gitCredentialHelperConfigLocation": "none",
+        "remote.containers.copyGitConfig": false,
+        "dev.containers.dockerCredentialHelper": false
+      }
+    }
+  },
+
+  // Blank VS Code's host-reaching channels for every process VS Code spawns (covers an
+  // agent's non-interactive shells; base's shell scrub covers integrated terminals).
+  // SSH_AUTH_SOCK is intentionally NOT blanked here — base scrubs it by default in shells;
+  // a project that needs the forwarded agent opts out via SCRUB_SSH_AUTH_SOCK_ENABLED.
+  "remoteEnv": {
+    "GIT_ASKPASS": "",
+    "VSCODE_GIT_IPC_HANDLE": "",
+    "VSCODE_GIT_ASKPASS_MAIN": "",
+    "VSCODE_GIT_ASKPASS_NODE": "",
+    "VSCODE_GIT_ASKPASS_EXTRA_ARGS": "",
+    "VSCODE_IPC_HOOK_CLI": "",
+    "BROWSER": "",
+    "GPG_AGENT_INFO": ""
+  }
+
+  // Layer 1 has no credential sidecar → devcred resolves to "none" and git/gh/aws are simply
+  // unauthenticated. Add GH_DEFAULT_ORG (containerEnv) + a sidecar at Layer 3 (03-vending).
+}

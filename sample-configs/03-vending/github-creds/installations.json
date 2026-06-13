@@ -1,0 +1,3 @@
+[
+  { "org": "<your-org>", "installation_id": "<installation-id>", "repos": ["<repo>"] }
+]
