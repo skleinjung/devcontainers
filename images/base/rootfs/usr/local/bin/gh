@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# gh wrapper — put the vended GitHub token in GH_TOKEN for the target org, then exec the
+# real gh. One `gh` call targets one repo/org, so we resolve the org it acts on — explicit
+# GH_ORG, else a -R/--repo flag or GH_REPO, else the cwd's origin remote, else
+# GH_DEFAULT_ORG — and hand that to `devcred get github/<org>`. Opt out: DEVCRED_GH_WRAPPER=off.
+#
+# This wrapper ships in base ahead of the real gh on PATH; gh itself is NOT installed by
+# base — install it (a feature, apt, etc.) and the token wiring applies automatically.
+#
+set -euo pipefail
+
+__org_of() { printf '%s' "${1%%/*}"; }
+__detect_org() {
+  [ -n "${GH_ORG:-}" ] && { printf '%s' "$GH_ORG"; return; }
+  local prev="" a
+  for a in "$@"; do
+    case "$prev" in -R | --repo) __org_of "$a"; return ;; esac
+    case "$a" in
+      --repo=*) __org_of "${a#--repo=}"; return ;;
+      -R?*) __org_of "${a#-R}"; return ;;
+    esac
+    prev="$a"
+  done
+  [ -n "${GH_REPO:-}" ] && { __org_of "$GH_REPO"; return; }
+  local url rest
+  url="$(git remote get-url origin 2>/dev/null || true)"
+  case "$url" in
+    *github.com*) rest="${url#*github.com}"; rest="${rest#[:/]}"; __org_of "$rest" ;;
+  esac
+}
+
+# Locate the real gh without recursing into this wrapper (/usr/local/bin/gh).
+real_gh=/usr/bin/gh
+[ -x "$real_gh" ] || real_gh="$(type -ap gh 2>/dev/null | grep -vx /usr/local/bin/gh | head -1)"
+[ -n "${real_gh:-}" ] && [ -x "$real_gh" ] \
+  || { echo "gh: not installed (this wrapper only sets GH_TOKEN; install gh to use it)" >&2; exit 127; }
+
+if [ -z "${GH_TOKEN:-}" ] && [ "${DEVCRED_GH_WRAPPER:-on}" != off ]; then
+  org="$(__detect_org "$@" 2>/dev/null || true)"
+  [ -n "${org:-}" ] || org="${GH_DEFAULT_ORG:-}"
+  [ -n "${org:-}" ] && export GH_TOKEN="$(devcred get "github/$org" 2>/dev/null || true)"
+fi
+
+exec "$real_gh" "$@"

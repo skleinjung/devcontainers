@@ -20,6 +20,7 @@ USER root
 # SUDO_FORCE_REMOVE permits purging the (protected) package.
 RUN export SUDO_FORCE_REMOVE=yes \
   && apt-get update \
+  && apt-get install -y --no-install-recommends jq \
   && apt-get -y purge sudo \
   && apt-get -y autoremove \
   && apt-get clean \
@@ -49,6 +50,19 @@ RUN printf '\n# Drop VS Code host-reaching channels from interactive shells\n. /
 # Default git's editor to nano: the scrub disables the `code` IPC socket, so git's
 # usual `code --wait` editor can't launch. nano is a working in-terminal fallback.
 RUN git config --system core.editor nano
+
+# Credential consumer adapters (shipped in rootfs/usr/local/bin: devcred + the git/gh
+# shims — see docs/SECRETS.md). Wire the github.com credential helper to `devcred`
+# (per-org tokens from the shelf, routed by the request path), and point AWS at the
+# shelf credentials file. All are INERT when no credential sidecar is attached: with no
+# /creds the helpers resolve to nothing and tools are simply unauthenticated.
+RUN chmod 0755 /usr/local/bin/devcred /usr/local/bin/git-credential-devcred \
+      /usr/local/bin/gh /usr/local/bin/reap-vscode-sockets
+RUN git config --system --unset-all 'credential.https://github.com.helper' 2>/dev/null || true; \
+    git config --system --add 'credential.https://github.com.helper' '' \
+  && git config --system --add 'credential.https://github.com.helper' 'devcred' \
+  && git config --system 'credential.https://github.com.useHttpPath' true
+ENV AWS_SHARED_CREDENTIALS_FILE=/creds/aws/credentials
 
 # Default to the unprivileged account (consumers can still `USER root` to install).
 USER ${USERNAME}

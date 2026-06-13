@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# devcred get <name> — resolve a short-lived secret by name from the credential shelf.
+#
+# Prints the secret VALUE on stdout (exit 0). On unavailable it prints nothing
+# (fail-open, exit 0) with a stderr breadcrumb, so callers (git/gh) are simply
+# unauthenticated rather than wedged. Transports, in precedence: the file shelf (a
+# credential sidecar's read-only /creds), then ambient env, then none. The socket/tcp
+# (broker) transports are reserved — see docs/SECRETS.md.
+#
+set -euo pipefail
+
+[ "${1:-}" = "get" ] || { echo "usage: devcred get <name>" >&2; exit 2; }
+name="${2:?usage: devcred get <name>}"
+SHELF="${DEVCRED_SHELF:-/creds}"
+SKEW="${DEVCRED_SKEW:-300}"   # treat a secret within 5 min of expiry as stale
+now=$(date +%s)
+
+# 1. file shelf: /creds/<name> = {"value":"…","expires_at":<epoch|null>}
+f="$SHELF/$name"
+if [ -f "$f" ]; then
+  val=$(jq -r '.value // empty' "$f" 2>/dev/null || true)
+  exp=$(jq -r 'if has("expires_at") and .expires_at != null then (.expires_at|tostring) else "null" end' "$f" 2>/dev/null || echo "")
+  if [ -n "$val" ]; then
+    if [ "$exp" = "null" ] || { [ "$exp" -gt "$((now + SKEW))" ]; } 2>/dev/null; then
+      printf '%s' "$val"; exit 0
+    fi
+  fi
+fi
+
+# 2. ambient env (best-effort, per kind)
+case "$name" in
+  github/*) [ -n "${GH_TOKEN:-}" ] && { printf '%s' "$GH_TOKEN"; exit 0; } || true ;;
+esac
+
+# 3. none — fail open, self-diagnosing on stderr so a failed git/gh call carries its fix
+{
+  echo "devcred: no valid secret for '$name'."
+  [ -e "$f" ] && echo "  shelf:  $f (stale or unparseable)" || echo "  shelf:  $f (missing)"
+  st="$SHELF/status/$(printf '%s' "$name" | tr / -)"
+  echo "  status: $(cat "$st" 2>/dev/null || echo 'absent — is a credential sidecar attached?')"
+} >&2
+exit 0

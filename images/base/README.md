@@ -124,6 +124,17 @@ protocol with a reserved verb slot, transport auto-detection (unix socket / tcp 
 file shelf / env / none), and why we don't use Vault et al. — is specified in
 [docs/SECRETS.md](../../docs/SECRETS.md).
 
+Concretely, `base` wires:
+
+- **`devcred get <name>`** — the resolver (file shelf → env → none, fail-open).
+- a github.com **git credential helper** (`devcred`, with `useHttpPath`) and a **`gh`**
+  wrapper, both → `devcred get github/<org>` (org from the request path / `-R` / cwd).
+- **`AWS_SHARED_CREDENTIALS_FILE=/creds/aws/credentials`** (the native AWS file).
+
+Set **`GH_DEFAULT_ORG`** so git/gh resolve an org when no repo context pins one. Per-adapter
+runtime opt-outs: `DEVCRED_GIT_HELPER=off`, `DEVCRED_GH_WRAPPER=off`. (`gh` itself isn't
+installed by `base` — the wrapper applies automatically once you add it.)
+
 ---
 
 Published as `ghcr.io/<owner>/devcontainers/base`.

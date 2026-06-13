@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# reap-vscode-sockets — container entrypoint that continuously deletes VS Code's CLI and
+# git-extension IPC sockets so untrusted code in the container can't reach them, then runs
+# the container's command. Wire it as the compose `entrypoint:` with `overrideCommand: false`
+# in devcontainer.json (so VS Code keeps it instead of its own keep-alive). See
+# docs/SECURITY.md §5 (the IPC-socket residual + reaper).
+#
+# Reaps:  /tmp/vscode-ipc-*.sock  (the `code` CLI channel — incl. --install-extension)
+#         /tmp/vscode-git-*.sock  (the git askpass/OAuth + git-editor IPC)
+# Spares: vscode-remote-containers-*.sock (the IDE<->container channel — deleting it breaks
+#         VS Code) and vscode-ssh-auth-*.sock (a forwarded agent).
+#
+# Defense-in-depth, not a wall: VS Code recreates the sockets, so there's a brief window
+# between recreation and the next sweep. The real guarantee is upstream — don't authorize
+# the VS Code git OAuth session.
+set -euo pipefail
+
+(
+  while true; do
+    find /tmp -maxdepth 1 -type s \
+      \( -name 'vscode-ipc-*.sock' -o -name 'vscode-git-*.sock' \) -delete 2>/dev/null || true
+    sleep 2
+  done
+) &
+
+if [ "$#" -gt 0 ]; then exec "$@"; else exec sleep infinity; fi
