@@ -8,6 +8,7 @@ project's `.devcontainer/` (it includes `github-creds/`).
 ```
 workspace                  the dev container (default image, or build your own FROM it)
 credential-shelf-aws       vends AWS role creds → /creds/aws/credentials
+  └ aws-creds/             a tiny derived image that bakes YOUR accounts.yaml
 credential-shelf-github    vends per-org GitHub App tokens → /creds/github/<org>
   └ github-creds/          a tiny derived image that bakes YOUR installations.json
 ```
@@ -17,8 +18,13 @@ shims**. `git push/pull` over HTTPS and `aws`/`gh` work once the sidecars are ve
 
 ## 1. Fill in before first run
 
-- **`docker-compose.yml`**: `GH_DEFAULT_ORG`, `VEND_AWS_PROFILES`, `VEND_GH_APP_ID`,
-  `VEND_GH_KMS_KEY_ID`, `VEND_GH_AWS_PROFILE` (the `<placeholders>`).
+- **`docker-compose.yml`**: `GH_DEFAULT_ORG`, `VEND_AWS_SSO_START_URL`,
+  `VEND_AWS_SSO_REGION`, `VEND_GH_APP_ID`, `VEND_GH_KMS_KEY_ID`, `VEND_GH_AWS_PROFILE`
+  (the `<placeholders>`).
+- **`aws-creds/accounts.yaml`**: the account/role(s) to vend; the first becomes the shelf
+  `[default]`. Each profile name defaults to `<account_id>-<role>` — set `name:` to override
+  with a friendlier `AWS_PROFILE=<name>`. Point `VEND_GH_AWS_PROFILE` at the `vend: false`
+  kms-signer entry here (give it an explicit `name`, since you reference it).
 - **`github-creds/installations.json`**: your org(s) + installation id(s) (+ optional
   `repos`/`perms`). Empty `[]` → GitHub vending idles.
 
@@ -36,11 +42,10 @@ Both sidecars share the `admin-home` volume, so **one** login serves both. From 
 terminal (the sidecars hold your SSO session; the workspace never does):
 
 ```sh
-# bring up the sidecars
+# bring up the sidecars (the AWS one renders ~/.aws/config from accounts.yaml on start)
 docker compose -p <project> up -d credential-shelf-aws credential-shelf-github
-# set up ~/.aws/config (your SSO start URL + the agent/kms profiles) in the shared home,
-# then log in — its cache lands in admin-home and both sidecars use it:
-docker exec -it <project>-credential-shelf-aws-1 aws sso login --profile <your-agent-profile>
+# log in once — the cache lands in the shared admin-home, so both sidecars use it:
+docker exec -it <project>-credential-shelf-aws-1 aws sso login --sso-session sso
 ```
 
 Within ~60s both vend. Check health from anywhere with the volume:

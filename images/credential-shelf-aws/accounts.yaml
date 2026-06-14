@@ -1,0 +1,18 @@
+# accounts.yaml — the roles this sidecar vends to the shelf (its grant table).
+#
+# Baked into the image, NOT a /workspace bind-mount, so changing vend scope is a reviewed
+# rebuild. One entry per role; the FIRST also becomes the shelf's [default]. The baked
+# default below is empty (the sidecar idles) — override by deriving an image:
+#
+#   FROM ghcr.io/<owner>/devcontainers/credential-shelf-aws:latest
+#   COPY accounts.yaml /etc/credential-shelf/accounts.yaml
+#
+# Only account_id and role are required. name defaults to <account_id>-<role>; region
+# defaults to VEND_AWS_SSO_REGION; vend defaults to true. Example:
+#   profiles:
+#     - account_id: "084828590319"
+#       role: developer-ai-agent   # the SSO permission-set / role name
+#       # name: developer          # optional; AWS_PROFILE=<name> selects it on the shelf
+#       # region: us-west-2        # optional; defaults to VEND_AWS_SSO_REGION
+#       # vend: false              # optional; write to ~/.aws/config but keep OFF the shelf
+profiles: []

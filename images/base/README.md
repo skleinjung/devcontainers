@@ -13,12 +13,6 @@ The `sudo` package is purged (`SUDO_FORCE_REMOVE`) and the base image's
 privilege-escalation path**. The base image's pre-made users (uid ≥ 1000) are also
 removed, eliminating the passwordless-sudo `vscode` grant the upstream ships.
 
-### Unprivileged user
-
-A single unprivileged account is (re)created and the image **defaults to it**
-(`USER ${USERNAME}`) — consumers can still switch to `USER root` to install
-software, then back. Name and ids are build args (see [Build args](#build-args)).
-
 ### Keep-alive command
 
 Sets `CMD ["sleep", "infinity"]` so the image stays running when used as a dev
@@ -54,21 +48,6 @@ in-terminal fallback.
 > Note: `SSH_AUTH_SOCK` is scrubbed by default here. If you rely on a forwarded
 > SSH agent (e.g. a hardware/FIDO key) in terminals, opt out of just that one — see
 > below.
-
-## Build args
-
-| Arg | Default | Purpose |
-|-----|---------|---------|
-| `USERNAME` | `vscode` | Name of the unprivileged dev account |
-| `USER_UID` | `1000` | Its uid |
-| `USER_GID` | `1000` | Its gid |
-
-```sh
-docker buildx bake base \
-  --set base.args.USERNAME=alice \
-  --set base.args.USER_UID=1001 \
-  --set base.args.USER_GID=1001
-```
 
 ## Customizing
 
@@ -108,11 +87,6 @@ services:
 ```jsonc
 "containerEnv": { "SCRUB_SSH_AUTH_SOCK_ENABLED": "false" }
 ```
-
-### Renaming the dev user / changing uid·gid
-
-Use the [build args](#build-args) above (these *are* build-time — they change the
-image, so they require a rebuild).
 
 ## Secrets & credentials
 

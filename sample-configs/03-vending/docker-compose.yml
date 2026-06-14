@@ -33,12 +33,13 @@ services:
   # Both share the `admin-home` volume, so a single `aws sso login` serves both. That
   # home (the SSO session) is mounted into NO consumer — only the sidecars.
   credential-shelf-aws:
-    image: ghcr.io/skleinjung/devcontainers/credential-shelf-aws:latest
+    build: ./aws-creds              # bakes aws-creds/accounts.yaml (reviewed rebuild)
     init: true
     restart: unless-stopped
     environment:
-      # space-separated ~/.aws/config profile(s) to vend; the first also becomes [default]
-      VEND_AWS_PROFILES: <your-agent-profile>
+      # upstream SSO session; the account/role(s) to vend live in aws-creds/accounts.yaml
+      VEND_AWS_SSO_START_URL: https://<your-sso>.awsapps.com/start
+      VEND_AWS_SSO_REGION: us-east-1
     volumes:
       - creds-shelf:/creds          # rw here
       - admin-home:/home/vscode     # SSO cache + ~/.aws
