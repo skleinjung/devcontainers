@@ -7,13 +7,6 @@
 # the bake generator (ci/gen-bake.sh).
 FROM mcr.microsoft.com/devcontainers/base:ubuntu
 
-# The unprivileged dev account. Defaults to the base image's `vscode` at uid/gid
-# 1000; override (e.g. to match a host user) with `--build-arg`, e.g.
-# `--build-arg USERNAME=alice --build-arg USER_UID=1001 --build-arg USER_GID=1001`.
-ARG USERNAME=vscode
-ARG USER_UID=1000
-ARG USER_GID=1000
-
 USER root
 
 # Remove sudo so the image has no setuid privilege-escalation path.
@@ -25,19 +18,6 @@ RUN export SUDO_FORCE_REMOVE=yes \
   && apt-get -y autoremove \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
-
-# Drop the base image's pre-made users (uid >= 1000) and any residual sudoers grant
-# files — the base grants its `vscode` user passwordless sudo via /etc/sudoers.d/vscode,
-# and userdel removes the account but not that file. Then (re)create USERNAME as a
-# plain, unprivileged account at the requested uid/gid.
-RUN getent passwd \
-    | awk -F: '($3 >= 1000) && ($1 != "nobody") {print $1}' \
-    | xargs -r -n 1 userdel -r \
-  && rm -rf /etc/sudoers.d/* \
-  && if [ "${USERNAME}" != "root" ]; then \
-       groupadd --gid "${USER_GID}" "${USERNAME}" || true \
-       && useradd -s /bin/bash -m -u "${USER_UID}" -g "${USER_GID}" "${USERNAME}"; \
-     fi
 
 # Install the VS Code git-auth/IPC scrub (rootfs/etc/profile.d/...) and source it
 # from /etc/bash.bashrc so interactive NON-login shells get it too (the profile.d
@@ -65,7 +45,7 @@ RUN git config --system --unset-all 'credential.https://github.com.helper' 2>/de
 ENV AWS_SHARED_CREDENTIALS_FILE=/creds/aws/credentials
 
 # Default to the unprivileged account (consumers can still `USER root` to install).
-USER ${USERNAME}
+USER vscode
 
 # Keep-alive for `docker run`/compose use as a dev container. CMD is inherited by
 # downstream images (e.g. `default`), so it's set once here. In a real devcontainer
