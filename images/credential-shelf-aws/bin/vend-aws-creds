@@ -2,11 +2,15 @@
 #
 # vend-aws-creds — AWS provider for the shelf credential sidecar.
 #
-# Exports STS credentials for the profiles in $VEND_AWS_PROFILES (from the SSO session in
-# this container's ~/.aws) and atomically writes the native AWS shared-credentials file
-# at /creds/aws/credentials — the docs/SECRETS.md AWS exception. The first profile also
-# becomes [default]; consumers select others with AWS_PROFILE=<name>. The full SSO
-# session stays in this container; only the listed roles' ≤1h creds reach the shelf.
+# Exports STS credentials for the shelf profiles (rendered into this container's
+# ~/.aws/config from the baked accounts.yaml by generate-aws-config) and atomically writes
+# the native AWS shared-credentials file at /creds/aws/credentials — the docs/SECRETS.md
+# AWS exception. The first profile also becomes [default]; consumers select others with
+# AWS_PROFILE=<name>. The full SSO session stays in this container; only the listed roles'
+# ≤1h creds reach the shelf.
+#
+# The profile list comes from ~/.aws/.vend-profiles (written by generate-aws-config), or
+# from $VEND_AWS_PROFILES if set (overrides the file — handy for `--once` testing).
 #
 # With no/expired SSO session it logs and waits — run `aws sso login` in this container.
 # `vend-aws-creds --once` vends a single time and exits nonzero on failure.
@@ -14,6 +18,7 @@ set -euo pipefail
 . /usr/local/lib/sidecar-lib.sh
 
 PROFILES="${VEND_AWS_PROFILES:-}"
+[ -n "$PROFILES" ] || PROFILES="$(cat "${VEND_AWS_PROFILES_FILE:-$HOME/.aws/.vend-profiles}" 2>/dev/null || true)"
 SHELF="$SC_SHELF_DIR/aws"
 REFRESH_BEFORE="${VEND_REFRESH_BEFORE:-900}" # re-vend when < 15 min remain
 CHECK_INTERVAL="${VEND_CHECK_INTERVAL:-60}"

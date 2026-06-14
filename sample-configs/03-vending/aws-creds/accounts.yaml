@@ -1,0 +1,18 @@
+# Roles this sidecar vends to the shelf. One entry per role; the FIRST also becomes the
+# shelf's [default]. Consumers select the others with AWS_PROFILE=<name>. Empty → idle.
+# See images/credential-shelf-aws for the full reference.
+profiles:
+  - account_id: "<account-id>"     # the FIRST entry becomes the shelf [default]
+    role: <permission-set-name>    # e.g. developer-ai-agent
+    # name defaults to <account-id>-<role>, e.g. 084828590319-developer-ai-agent;
+    # uncomment to pick a friendlier AWS_PROFILE=<name>:
+    # name: <your-agent-profile>
+  # The github sidecar reads its kms:Sign role from the shared ~/.aws/config. Add it here
+  # with vend: false so it lands in the config but NOT on the shelf, then point
+  # VEND_GH_AWS_PROFILE at this name. Drop this entry if you don't run the github sidecar.
+  # (Temporary: the broker will vend this straight to the github sidecar instead — see
+  # images/credential-shelf-aws and docs/CREDENTIAL-BROKER.md.)
+  - name: <kms-signer-profile>
+    account_id: "<account-id>"
+    role: <kms-signer-role>
+    vend: false

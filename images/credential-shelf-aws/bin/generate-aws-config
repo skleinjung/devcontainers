@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# generate-aws-config — render ~/.aws/config from the baked accounts.yaml + SSO env.
+#
+# The shelf's grant table (which account/role each shelf profile maps to) lives in the
+# baked accounts.yaml; the upstream SSO session (start URL, region) comes from env. This
+# turns the two into a native ~/.aws/config: one [sso-session] block plus one [profile]
+# per entry. It also writes the ordered profile-name list to ~/.aws/.vend-profiles, which
+# vend-aws-creds reads. Run once at container start (see aws-sidecar-start); it needs no
+# SSO session of its own — `aws sso login` happens afterward.
+set -euo pipefail
+. /usr/local/lib/sidecar-lib.sh
+log() { sc_log generate-aws-config "$@"; }
+
+ACCOUNTS="${VEND_AWS_ACCOUNTS_FILE:-/etc/credential-shelf/accounts.yaml}"
+CONFIG="${AWS_CONFIG_FILE:-$HOME/.aws/config}"
+PROFILES_FILE="${VEND_AWS_PROFILES_FILE:-$HOME/.aws/.vend-profiles}"
+START_URL="${VEND_AWS_SSO_START_URL:-}"
+SSO_REGION="${VEND_AWS_SSO_REGION:-us-east-1}"
+SESSION="${VEND_AWS_SSO_SESSION:-sso}"
+
+[ -f "$ACCOUNTS" ] || { log "no accounts file at $ACCOUNTS; nothing to generate"; exit 0; }
+count=$(yq '.profiles | length' "$ACCOUNTS" 2>/dev/null || echo 0)
+[ "$count" -gt 0 ] || { log "$ACCOUNTS has no profiles; sidecar will idle"; exit 0; }
+
+[ -n "$START_URL" ] || { log "VEND_AWS_SSO_START_URL is unset but $ACCOUNTS lists $count profile(s); set it in the sidecar env"; exit 1; }
+
+umask 077
+mkdir -p "$(dirname "$CONFIG")"
+tmp=$(mktemp "$(dirname "$CONFIG")/.config.XXXXXX")
+
+{
+  printf '[sso-session %s]\n' "$SESSION"
+  printf 'sso_start_url = %s\n' "$START_URL"
+  printf 'sso_region = %s\n' "$SSO_REGION"
+  printf 'sso_registration_scopes = sso:account:access\n\n'
+} >>"$tmp"
+
+names=()
+for i in $(seq 0 $((count - 1))); do
+  acct=$(yq -r ".profiles[$i].account_id" "$ACCOUNTS")
+  role=$(yq -r ".profiles[$i].role" "$ACCOUNTS")
+  region=$(yq -r ".profiles[$i].region // \"$SSO_REGION\"" "$ACCOUNTS")
+  # NB: not `.vend // true` — yq's // treats a literal `false` as "absent" and returns the
+  # default, so an explicit `vend: false` would wrongly read as true. Read raw; null = true.
+  vend=$(yq -r ".profiles[$i].vend" "$ACCOUNTS")
+  for f in account_id:"$acct" role:"$role"; do
+    if [ -z "${f#*:}" ] || [ "${f#*:}" = null ]; then
+      rm -f "$tmp"; log "profiles[$i] is missing '${f%%:*}' in $ACCOUNTS"; exit 1
+    fi
+  done
+  # name is optional; default to <account_id>-<role>.
+  name=$(yq -r ".profiles[$i].name" "$ACCOUNTS")
+  { [ -n "$name" ] && [ "$name" != null ]; } || name="${acct}-${role}"
+  {
+    printf '[profile %s]\n' "$name"
+    printf 'sso_session = %s\n' "$SESSION"
+    printf 'sso_account_id = %s\n' "$acct"
+    printf 'sso_role_name = %s\n' "$role"
+    printf 'region = %s\n\n' "$region"
+  } >>"$tmp"
+  # vend: false → written to ~/.aws/config (e.g. a kms:Sign role the github sidecar uses
+  # over the shared home) but kept OFF the shelf, so consumers never see those creds.
+  # TEMPORARY: this is a shelf-era stopgap. The shelf is all-or-nothing — a role is either
+  # on it (every consumer) or off it (nobody). `vend: false` is the "off it, reachable only
+  # via the shared home" escape hatch. Once per-container vending lands (the broker, see
+  # docs/CREDENTIAL-BROKER.md), such a role is granted to the ONE sidecar that needs it and
+  # nowhere else, and this flag goes away.
+  [ "$vend" = false ] || names+=("$name")
+done
+
+mv "$tmp" "$CONFIG"
+printf '%s\n' "${names[*]}" >"$PROFILES_FILE"
+log "wrote $CONFIG ($count profile(s)); vending to shelf: ${names[*]:-none} (first → [default])"

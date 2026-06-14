@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# aws-sidecar-start — container entrypoint: render ~/.aws/config once, then vend forever.
+#
+# generate-aws-config is best-effort: if the sidecar is misconfigured (no SSO URL, bad
+# accounts.yaml) it exits nonzero and the vend loop reports the problem via the
+# /creds/status/aws health stamp rather than crash-looping the container.
+set -euo pipefail
+generate-aws-config || true
+exec vend-aws-creds
